@@ -1,4 +1,4 @@
-# FeedSense Portfolio Engine
+# LBIS Portfolio Engine
 
 Python backend service that processes stock directives from FeedSense AI,
 runs scoring via Perplexity `sonar-pro`, computes capital allocation, and
