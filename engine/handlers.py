@@ -1,7 +1,6 @@
 import logging
-from datetime import date
 
-from config import BOTTOM_FISH_PCT, BOTTOM_FISH_MAX, SELL_LADDER_STEPS
+from config import BOTTOM_FISH_PCT, BOTTOM_FISH_MAX
 from db.client import (
     get_unit,
     update_unit,
@@ -9,15 +8,9 @@ from db.client import (
     upsert_portfolio_state,
     get_portfolio_state,
     delete_scoring,
-    insert_directive,
 )
 
 log = logging.getLogger(__name__)
-
-# ── Shared helpers ────────────────────────────────────────────────────────────
-
-def _current_date():
-    return date.today().isoformat()
 
 def _update_portfolio_invested(delta):
     state = get_portfolio_state()
@@ -48,16 +41,13 @@ def _get_l1_l4_proceeds(unit_id):
             total += abs(float(row["delta_investment"]))
     return total
 
-# ── BUY / BUY-IN-BUY ─────────────────────────────────────────────────────────
+
 
 def handle_buy(directive):
     unit_id = directive["unit_id"]
     directive_id = directive["directive_id"]
     price = float(directive["current_price"])
     unit = get_unit(unit_id)
-
-    # Determine allocation amount for this unit
-    # At BUY time, use allocation fields already written by scoring/allocation
     alloc_score = float(unit.get("allocation_score") or 0)
     alloc_green = float(unit.get("allocation_green_count") or 0)
     alloc_return = float(unit.get("allocation_max_return") or 0)
@@ -65,33 +55,28 @@ def handle_buy(directive):
 
     if total_alloc <= 0:
         log.warning(
-            f"[BUY] Unit {unit_id} has no allocation yet — "
-            "scoring must run first. Skipping ledger entry."
+            f"[BUY] Unit {unit_id} has 0.0 allocation (check scores/capital). "
+            "Skipping ledger entry."
         )
         return
 
     shares = _shares_for_amount(total_alloc, price)
     actual_investment = shares * price
 
-    # Update positions
     update_unit(unit_id, {
         "num_shares":       shares,
         "total_investment": actual_investment,
         "status":           "active",
     })
 
-    # Ledger entry (positive = buy)
     write_ledger(unit_id, directive_id, shares, actual_investment)
 
-    # Portfolio state
     _update_portfolio_invested(actual_investment)
 
     log.info(
         f"[BUY] unit={unit_id} shares={shares} @ {price} "
         f"investment={actual_investment:.2f}"
     )
-
-# ── PARTIAL SELL ──────────────────────────────────────────────────────────────
 
 def handle_partial_sell(directive):
     unit_id = directive["unit_id"]
@@ -126,9 +111,6 @@ def handle_partial_sell(directive):
         f"@ {price} proceeds={proceeds:.2f} → status=free"
     )
 
-# ── SELL L1 – L4 ─────────────────────────────────────────────────────────────
-
-# Map directive name → target cumulative pct after execution
 _SELL_LEVEL_TARGET = {
     "SELL L1": 25,
     "SELL L2": 50,
@@ -155,8 +137,6 @@ def handle_sell_ladder(directive):
 
     pct_to_sell = target_pct - current_pct
 
-    # Original holding = what was bought at BUY time
-    # We reconstruct from ledger or use num_shares / (1 - current_pct/100)
     original_shares = round(unit["num_shares"] / (1 - current_pct / 100)
                             ) if current_pct < 100 else unit["num_shares"]
     shares_to_sell = round(original_shares * pct_to_sell / 100)
@@ -179,7 +159,6 @@ def handle_sell_ladder(directive):
     _update_portfolio_invested(-proceeds)
 
     if new_status == "sold":
-        # Clean up scoring row — will be recreated on re-entry
         delete_scoring(unit_id)
         log.info(f"[{level_name}] Unit {unit_id} fully sold → scoring deleted.")
 
@@ -187,8 +166,6 @@ def handle_sell_ladder(directive):
         f"[{level_name}] unit={unit_id} sold={shares_to_sell} shares "
         f"@ {price} ladder={current_pct}%→{new_pct}% status={new_status}"
     )
-
-# ── BOTTOM FISHING BUY ────────────────────────────────────────────────────────
 
 def handle_bottom_fishing(directive):
     unit_id = directive["unit_id"]
@@ -217,7 +194,6 @@ def handle_bottom_fishing(directive):
         "total_investment":  float(unit["total_investment"]) + actual_cost,
         "bottom_fish_count": new_fish_count,
         "status":            "active",
-        # Re-entry: reset ladder and partial sell flag
         "sell_ladder_pct":   0,
         "partial_sell_done": False,
     })
@@ -229,8 +205,6 @@ def handle_bottom_fishing(directive):
         f"[BFB] unit={unit_id} fish_count={new_fish_count} "
         f"shares={shares} @ {price} cost={actual_cost:.2f}"
     )
-
-# ── STOPLOSS BUY / OLD BUY ────────────────────────────────────────────────────
 
 def handle_stoploss_or_old_buy(directive):
     unit_id = directive["unit_id"]
@@ -255,7 +229,6 @@ def handle_stoploss_or_old_buy(directive):
         "num_shares":        unit["num_shares"] + shares,
         "total_investment":  float(unit["total_investment"]) + actual_cost,
         "status":            "active",
-        # Full re-entry reset
         "sell_ladder_pct":   0,
         "bottom_fish_count": 0,
         "partial_sell_done": False,
@@ -269,17 +242,12 @@ def handle_stoploss_or_old_buy(directive):
         f"shares={shares} @ {price} actual_cost={actual_cost:.2f}"
     )
 
-# ── ADJ BUY / ADJ SELL ───────────────────────────────────────────────────────
-
 def handle_adj_buy(directive):
     unit_id = directive["unit_id"]
     directive_id = directive["directive_id"]
     price = float(directive["current_price"])
     unit = get_unit(unit_id)
 
-    # adj_amount is stored temporarily in a context dict passed by rebalancer.
-    # We read it from the directive's implicit context via the amount field.
-    # For now, calculate from current allocation vs invested.
     alloc_total = (
         float(unit.get("allocation_score") or 0)
         + float(unit.get("allocation_green_count") or 0)
@@ -339,7 +307,7 @@ def handle_adj_sell(directive):
     log.info(
         f"[ADJ SELL] unit={unit_id} -{shares_to_sell} shares @ {price} proceeds={proceeds:.2f}")
 
-# ── Dispatch table ────────────────────────────────────────────────────────────
+
 
 HANDLER_MAP = {
     "BUY":                handle_buy,

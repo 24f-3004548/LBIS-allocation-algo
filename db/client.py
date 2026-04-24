@@ -1,23 +1,13 @@
-from supabase import create_client, Client
+from supabase import create_client
 from config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
-# Single shared client for the whole process
 db = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-# ── Positions ─────────────────────────────────────────────────────────────────
 
 def get_unit(unit_id):
     res = db.table("positions").select(
         "*").eq("unit_id", unit_id).single().execute()
     return res.data
 
-def create_unit(isin, name):
-    res = (
-        db.table("positions")
-        .insert({"isin": isin, "name": name, "status": "active"})
-        .execute()
-    )
-    return res.data[0]
 
 def update_unit(unit_id, fields):
     from datetime import datetime, timezone
@@ -30,25 +20,17 @@ def update_unit(unit_id, fields):
     )
     return res.data[0]
 
-def get_all_active_units():
-    res = (
-        db.table("positions")
-        .select("*")
-        .in_("status", ["active", "free"])
-        .execute()
-    )
-    return res.data
 
 def get_all_units_with_scoring():
     res = (
         db.table("positions")
         .select("*, scoring(*)")
-        .in_("status", ["active", "free"])
+        .or_("status.in.(active,free),status.is.null")
         .execute()
     )
     return res.data
 
-# ── Directives ────────────────────────────────────────────────────────────────
+
 
 def get_unprocessed_directives():
     res = (
@@ -60,16 +42,6 @@ def get_unprocessed_directives():
     )
     return res.data
 
-def get_pending_buy_directives():
-    res = (
-        db.table("stock_directives")
-        .select("*")
-        .in_("directive", ["BUY", "BUY-IN-BUY"])
-        .is_("processed_at", "null")
-        .order("directive_id", desc=False)
-        .execute()
-    )
-    return res.data
 
 def mark_directive_processed(directive_id):
     from datetime import datetime, timezone
@@ -85,23 +57,20 @@ def insert_directive(
     current_price,
     date=None,
 ):
-    from datetime import datetime, timezone
-
-    now = datetime.now(timezone.utc)
     payload = {
         "unit_id": unit_id,
         "isin": isin,
         "name": name,
         "directive": directive,
         "current_price": current_price,
-        "processed_at": now.isoformat(),
+        "processed_at": None,
     }
     if date:
         payload["date"] = date
     res = db.table("stock_directives").insert(payload).execute()
     return res.data[0]
 
-# ── Ledger ────────────────────────────────────────────────────────────────────
+
 
 def write_ledger(
     unit_id,
@@ -126,7 +95,7 @@ def write_ledger(
     res = db.table("ledger").insert(payload).execute()
     return res.data[0]
 
-# ── Scoring ───────────────────────────────────────────────────────────────────
+
 
 def upsert_scoring(unit_id, fields):
     payload = {"unit_id": unit_id, **fields}
@@ -140,11 +109,8 @@ def upsert_scoring(unit_id, fields):
 def delete_scoring(unit_id):
     db.table("scoring").delete().eq("unit_id", unit_id).execute()
 
-def get_all_scoring():
-    res = db.table("scoring").select("*").execute()
-    return res.data
 
-# ── Portfolio State ───────────────────────────────────────────────────────────
+
 
 def get_portfolio_state():
     res = db.table("portfolio_state").select(

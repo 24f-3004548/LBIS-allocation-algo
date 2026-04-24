@@ -33,16 +33,4 @@ def record_error(
     except Exception as inner:
         log.error(f"[errors] Failed to write error to DB: {inner}")
 
-def resolve_error(error_id):
-    db.table("engine_errors").update({"resolved": True}).eq(
-        "error_id", error_id).execute()
 
-def get_unresolved_errors():
-    res = (
-        db.table("engine_errors")
-        .select("*")
-        .eq("resolved", False)
-        .order("created_at", desc=False)
-        .execute()
-    )
-    return res.data

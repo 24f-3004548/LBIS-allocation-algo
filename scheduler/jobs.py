@@ -1,7 +1,6 @@
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.triggers.cron import CronTrigger
 
 from config import POLL_INTERVAL_SECONDS, REBALANCE_INTERVAL_DAYS
 from engine.processor import process_immediate_directives
@@ -15,7 +14,6 @@ _is_rebalancing = False
 def _poll_job():
     global _is_rebalancing
     if _is_rebalancing:
-        # Silently skip polling while a heavy rebalance cycle is happening
         return
 
     try:
@@ -47,7 +45,6 @@ def start_scheduler():
 
     _scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 
-    # Poll for immediate directives every N seconds
     _scheduler.add_job(
         _poll_job,
         trigger=IntervalTrigger(seconds=POLL_INTERVAL_SECONDS),
@@ -58,7 +55,6 @@ def start_scheduler():
 
     from datetime import datetime
 
-    # Rebalance immediately, then every 15 days from now
     _scheduler.add_job(
         _rebalance_job,
         trigger=IntervalTrigger(

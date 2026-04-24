@@ -60,10 +60,10 @@ def run_allocation():
     units = []
     for row in rows:
         scoring = row.get("scoring") or {}
-        flat = {**row, **scoring}
-        flat.setdefault("score", 0)
-        flat.setdefault("green_count", 0)
-        flat.setdefault("max_return", 0)
+        flat = {**row}
+        flat["score"] = max(0.0, float(scoring.get("score") or 0.0))
+        flat["green_count"] = max(0.0, float(scoring.get("green_count") or 0.0))
+        flat["max_return"] = max(0.0, float(scoring.get("max_return") or 0.0))
         units.append(flat)
 
     ranks = _compute_ranks(units)
